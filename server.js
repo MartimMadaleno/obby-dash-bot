@@ -75,7 +75,6 @@ app.post('/change-role', async (req, res) => {
 
     console.log(`[INFO] POST /change-role received - userId: ${userId}, roleId: ${roleId}`);
 
-    // Token authentication
     if (token !== API_TOKEN) {
         console.warn(`[WARN] Invalid token provided from ${req.ip}`);
         return res.status(401).json({ error: 'Invalid token' });
@@ -87,52 +86,50 @@ app.post('/change-role', async (req, res) => {
     }
 
     try {
-        // Login to Roblox
-        console.log('[INFO] Logging into Roblox with bot account');
         await noblox.setCookie(ROBLOX_COOKIE);
         console.log('[INFO] Successfully logged into Roblox');
 
-        // Get current role
         const currentRank = await noblox.getRankInGroup(GROUP_ID, userId);
         console.log(`[INFO] Current rank for user ${userId}: ${currentRank} (${ROLE_MAPPING[currentRank]?.name || 'Unknown'})`);
 
-        // Check if new role is higher
-        if (roleId > currentRank) {
-            // Update Roblox role
+        if (roleId > currentRank && roleId !== 255) {
             console.log(`[INFO] Updating Roblox rank for user ${userId} to ${roleId} (${ROLE_MAPPING[roleId].name})`);
             await noblox.setRank(GROUP_ID, userId, roleId);
             console.log(`[SUCCESS] Updated Roblox rank for user ${userId} to ${roleId}`);
+        } else if (currentRank === 255) {
+            console.log(`[INFO] User ${userId} is owner (rank 255), skipping Roblox rank update`);
+        } else {
+            console.log(`[INFO] Role ${roleId} (${ROLE_MAPPING[roleId].name}) is not higher than current rank ${currentRank}, no Roblox change made`);
+        }
 
-            // Sync with Discord
-            const guild = discordClient.guilds.cache.get(DISCORD_GUILD_ID);
-            if (!guild) {
-                console.warn('[WARN] Discord guild not found');
-                return res.status(500).json({ error: 'Discord guild not found' });
-            }
+        const guild = discordClient.guilds.cache.get(DISCORD_GUILD_ID);
+        if (!guild) {
+            console.warn('[WARN] Discord guild not found');
+            return res.status(500).json({ error: 'Discord guild not found' });
+        }
 
-            console.log(`[INFO] Fetching Discord member for user ${userId}`);
-            const discordMember = await guild.members.fetch(userId).catch(() => null);
-            if (discordMember) {
-                // Remove lower level roles (but keep manual roles like Staff)
+        console.log(`[INFO] Fetching Discord member for user ${userId}`);
+        const discordMember = await guild.members.fetch(userId).catch(() => null);
+        if (discordMember) {
+            // If the requested role is a level role, remove lower level roles
+            if (LEVEL_ROLES.includes(roleId)) {
                 const rolesToRemove = LEVEL_ROLES
                     .filter(r => r < roleId && ROLE_MAPPING[r])
                     .map(r => ROLE_MAPPING[r].discordRoleId);
                 console.log(`[INFO] Removing lower roles for ${userId}: ${rolesToRemove.join(', ')}`);
                 await discordMember.roles.remove(rolesToRemove.filter(r => r));
                 console.log(`[SUCCESS] Removed lower roles for ${userId}`);
+            }
 
-                // Add the new role
-                const newRoleId = ROLE_MAPPING[roleId].discordRoleId;
-                if (newRoleId) {
-                    console.log(`[INFO] Adding role ${newRoleId} (${ROLE_MAPPING[roleId].name}) to ${userId}`);
-                    await discordMember.roles.add(newRoleId);
-                    console.log(`[SUCCESS] Added role ${newRoleId} to ${userId}`);
-                }
-            } else {
-                console.warn(`[WARN] Discord member ${userId} not found in guild ${DISCORD_GUILD_ID}`);
+            // Add the requested role
+            const newRoleId = ROLE_MAPPING[roleId].discordRoleId;
+            if (newRoleId) {
+                console.log(`[INFO] Adding role ${newRoleId} (${ROLE_MAPPING[roleId].name}) to ${userId}`);
+                await discordMember.roles.add(newRoleId);
+                console.log(`[SUCCESS] Added role ${newRoleId} to ${userId}`);
             }
         } else {
-            console.log(`[INFO] Role ${roleId} (${ROLE_MAPPING[roleId].name}) is not higher than current rank ${currentRank}, no change made`);
+            console.warn(`[WARN] Discord member ${userId} not found in guild ${DISCORD_GUILD_ID}`);
         }
 
         res.json({ success: true, message: 'Role updated or no change needed' });
