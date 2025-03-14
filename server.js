@@ -4,6 +4,8 @@ const noblox = require('noblox.js');
 const { Client } = require('discord.js');
 const app = express();
 app.use(express.json());
+// API endpoint to change role
+const axios = require('axios');
 
 // Configuration (store these securely, e.g., in environment variables)
 const API_TOKEN = process.env.API_TOKEN || 'your-secret-token'; // Replace with env variable
@@ -69,70 +71,74 @@ app.get('/', (req, res) => {
     `);
 });
 
-// API endpoint to change role
 app.post('/change-role', async (req, res) => {
-    const { userId, roleId, token } = req.body;
+    const { userId, roleId, token } = req.body; // userId is Roblox userId
 
     console.log(`[INFO] POST /change-role received - userId: ${userId}, roleId: ${roleId}`);
 
+    // Check API token (your server's security)
     if (token !== API_TOKEN) {
-        console.warn(`[WARN] Invalid token provided from ${req.ip}`);
+        console.warn(`[WARN] Invalid token from ${req.ip}`);
         return res.status(401).json({ error: 'Invalid token' });
     }
 
+    // Validate input
     if (!userId || !roleId || typeof roleId !== 'number' || !ROLE_MAPPING[roleId]) {
         console.warn(`[WARN] Invalid userId (${userId}) or roleId (${roleId})`);
         return res.status(400).json({ error: 'Invalid userId or roleId' });
     }
 
     try {
-        await noblox.setCookie(ROBLOX_COOKIE);
-        console.log('[INFO] Successfully logged into Roblox');
-
-        const currentRank = await noblox.getRankInGroup(GROUP_ID, userId);
-        console.log(`[INFO] Current rank for user ${userId}: ${currentRank} (${ROLE_MAPPING[currentRank]?.name || 'Unknown'})`);
-
-        if (roleId > currentRank && roleId !== 255) {
-            console.log(`[INFO] Updating Roblox rank for user ${userId} to ${roleId} (${ROLE_MAPPING[roleId].name})`);
-            await noblox.setRank(GROUP_ID, userId, roleId);
-            console.log(`[SUCCESS] Updated Roblox rank for user ${userId} to ${roleId}`);
-        } else if (currentRank === 255) {
-            console.log(`[INFO] User ${userId} is owner (rank 255), skipping Roblox rank update`);
-        } else {
-            console.log(`[INFO] Role ${roleId} (${ROLE_MAPPING[roleId].name}) is not higher than current rank ${currentRank}, no Roblox change made`);
+        // Step 1: Check RoVer for Discord ID linked to Roblox userId
+        let discordId;
+        try {
+            const roverResponse = await axios.get(
+                `https://api.rover.link/roblox-to-discord/${userId}`,
+                { headers: { Authorization: `Bearer ${process.env.ROVER_API_KEY}` } } // Use your API key
+            );
+            discordId = roverResponse.data.discordId || null; // RoVer returns { discordId: "..." }
+            if (!discordId) {
+                console.log(`[INFO] No Discord ID found for Roblox user ${userId} in RoVer`);
+                return res.json({ success: false, message: 'User not verified with RoVer' });
+            }
+            console.log(`[INFO] RoVer found: Roblox ${userId} -> Discord ${discordId}`);
+        } catch (error) {
+            console.warn(`[WARN] RoVer API error for Roblox user ${userId}: ${error.message}`);
+            return res.json({ success: false, message: 'User not verified with RoVer' });
         }
 
+        // Step 2: Check if Discord user is in the server
         const guild = discordClient.guilds.cache.get(DISCORD_GUILD_ID);
         if (!guild) {
             console.warn('[WARN] Discord guild not found');
             return res.status(500).json({ error: 'Discord guild not found' });
         }
 
-        console.log(`[INFO] Fetching Discord member for user ${userId}`);
-        const discordMember = await guild.members.fetch(userId).catch(() => null);
-        if (discordMember) {
-            // If the requested role is a level role, remove lower level roles
-            if (LEVEL_ROLES.includes(roleId)) {
-                const rolesToRemove = LEVEL_ROLES
-                    .filter(r => r < roleId && ROLE_MAPPING[r])
-                    .map(r => ROLE_MAPPING[r].discordRoleId);
-                console.log(`[INFO] Removing lower roles for ${userId}: ${rolesToRemove.join(', ')}`);
-                await discordMember.roles.remove(rolesToRemove.filter(r => r));
-                console.log(`[SUCCESS] Removed lower roles for ${userId}`);
-            }
+        const discordMember = await guild.members.fetch(discordId).catch(() => null);
+        if (!discordMember) {
+            console.log(`[INFO] Discord user ${discordId} not found in server ${DISCORD_GUILD_ID}`);
+            return res.json({ success: false, message: 'User not in Discord server' });
+        }
+        console.log(`[INFO] Discord user ${discordId} confirmed in server`);
 
-            // Add the requested role
-            const newRoleId = ROLE_MAPPING[roleId].discordRoleId;
-            if (newRoleId) {
-                console.log(`[INFO] Adding role ${newRoleId} (${ROLE_MAPPING[roleId].name}) to ${userId}`);
-                await discordMember.roles.add(newRoleId);
-                console.log(`[SUCCESS] Added role ${newRoleId} to ${userId}`);
-            }
-        } else {
-            console.warn(`[WARN] Discord member ${userId} not found in guild ${DISCORD_GUILD_ID}`);
+        // Step 3: Update Discord roles
+        if (LEVEL_ROLES.includes(roleId)) {
+            const rolesToRemove = LEVEL_ROLES
+                .filter(r => r < roleId && ROLE_MAPPING[r])
+                .map(r => ROLE_MAPPING[r].discordRoleId);
+            console.log(`[INFO] Removing lower roles for ${discordId}: ${rolesToRemove.join(', ')}`);
+            await discordMember.roles.remove(rolesToRemove.filter(r => r));
+            console.log(`[SUCCESS] Removed lower roles for ${discordId}`);
         }
 
-        res.json({ success: true, message: 'Role updated or no change needed' });
+        const newRoleId = ROLE_MAPPING[roleId].discordRoleId;
+        if (newRoleId) {
+            console.log(`[INFO] Adding role ${newRoleId} (${ROLE_MAPPING[roleId].name}) to ${discordId}`);
+            await discordMember.roles.add(newRoleId);
+            console.log(`[SUCCESS] Added role ${newRoleId} to ${discordId}`);
+        }
+
+        res.json({ success: true, message: 'Discord role updated successfully' });
     } catch (error) {
         console.error('[ERROR] Error updating role:', error.message);
         console.error('[ERROR] Stack trace:', error.stack);
