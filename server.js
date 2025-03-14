@@ -6,7 +6,7 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-// Configuration (store these securely, e.g., in environment variables)
+// Configuration
 const API_TOKEN = process.env.API_TOKEN || 'your-secret-token';
 const ROBLOX_COOKIE = process.env.ROBLOX_COOKIE;
 const GROUP_ID = process.env.GROUP_ID;
@@ -29,7 +29,7 @@ const ROLE_MAPPING = {
     12: { robloxRank: 12, discordRoleId: '1345026491389448262', name: 'VIP' }
 };
 
-// Level-based roles to remove (roles that get replaced by higher ones)
+// Level-based roles to remove
 const LEVEL_ROLES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 // Discord bot setup
@@ -45,7 +45,7 @@ discordClient.login(DISCORD_TOKEN).catch(error => {
     process.exit(1);
 });
 
-// Default GET route with simple HTML
+// Default GET route
 app.get('/', (req, res) => {
     console.log(`[INFO] GET request received at / from ${req.ip}`);
     res.send(`
@@ -87,7 +87,7 @@ app.post('/change-role', async (req, res) => {
     }
 
     try {
-        // Step 1: Roblox rank update (keeping your original logic)
+        // Step 1: Roblox rank update
         await noblox.setCookie(ROBLOX_COOKIE);
         console.log('[INFO] Successfully logged into Roblox');
 
@@ -108,21 +108,22 @@ app.post('/change-role', async (req, res) => {
         let discordId;
         try {
             const roverResponse = await axios.get(
-                `https://api.rover.link/roblox-to-discord/${userId}`,
+                `https://registry.rover.link/api/guilds/${DISCORD_GUILD_ID}/roblox-to-discord/${userId}`,
                 { headers: { Authorization: `Bearer ${process.env.ROVER_API_KEY}` } }
             );
-            discordId = roverResponse.data.discordId || null;
-            if (!discordId) {
-                console.log(`[INFO] No Discord ID found for Roblox user ${userId} in RoVer`);
+            const discordUsers = roverResponse.data.discordUsers || [];
+            if (discordUsers.length === 0) {
+                console.log(`[INFO] No Discord ID found for Roblox user ${userId} in RoVer for guild ${DISCORD_GUILD_ID}`);
                 return res.json({ success: false, message: 'User not verified with RoVer' });
             }
+            discordId = discordUsers[0].user.id; // Take the first Discord ID
             console.log(`[INFO] RoVer found: Roblox ${userId} -> Discord ${discordId}`);
         } catch (error) {
             console.warn(`[WARN] RoVer API error for Roblox user ${userId}: ${error.message}`);
-            return res.json({ success: false, message: 'User not verified with RoVer' });
+            return res.json({ success: false, message: 'User not verified with RoVer or API error' });
         }
 
-        // Step 3: Check if Discord user is in the server
+        // Step 3: Check Discord server membership (redundant due to RoVer guild scoping, but kept for safety)
         const guild = discordClient.guilds.cache.get(DISCORD_GUILD_ID);
         if (!guild) {
             console.warn('[WARN] Discord guild not found');
