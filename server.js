@@ -2,17 +2,16 @@ require('dotenv').config();
 const express = require('express');
 const noblox = require('noblox.js');
 const { Client } = require('discord.js');
+const axios = require('axios');
 const app = express();
 app.use(express.json());
-// API endpoint to change role
-const axios = require('axios');
 
 // Configuration (store these securely, e.g., in environment variables)
-const API_TOKEN = process.env.API_TOKEN || 'your-secret-token'; // Replace with env variable
-const ROBLOX_COOKIE = process.env.ROBLOX_COOKIE; // Roblox .ROBLOSECURITY cookie
-const GROUP_ID = process.env.GROUP_ID; // Your Roblox group ID
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN; // Discord bot token
-const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID; // Your Discord server ID
+const API_TOKEN = process.env.API_TOKEN || 'your-secret-token';
+const ROBLOX_COOKIE = process.env.ROBLOX_COOKIE;
+const GROUP_ID = process.env.GROUP_ID;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 // Role mapping dictionary
 const ROLE_MAPPING = {
@@ -43,7 +42,7 @@ discordClient.once('ready', () => {
 
 discordClient.login(DISCORD_TOKEN).catch(error => {
     console.error('[ERROR] Failed to login to Discord:', error.message);
-    process.exit(1); // Exit process if Discord login fails
+    process.exit(1);
 });
 
 // Default GET route with simple HTML
@@ -71,32 +70,48 @@ app.get('/', (req, res) => {
     `);
 });
 
+// API endpoint to change role
 app.post('/change-role', async (req, res) => {
     const { userId, roleId, token } = req.body; // userId is Roblox userId
 
     console.log(`[INFO] POST /change-role received - userId: ${userId}, roleId: ${roleId}`);
 
-    // Check API token (your server's security)
     if (token !== API_TOKEN) {
-        console.warn(`[WARN] Invalid token from ${req.ip}`);
+        console.warn(`[WARN] Invalid token provided from ${req.ip}`);
         return res.status(401).json({ error: 'Invalid token' });
     }
 
-    // Validate input
     if (!userId || !roleId || typeof roleId !== 'number' || !ROLE_MAPPING[roleId]) {
         console.warn(`[WARN] Invalid userId (${userId}) or roleId (${roleId})`);
         return res.status(400).json({ error: 'Invalid userId or roleId' });
     }
 
     try {
-        // Step 1: Check RoVer for Discord ID linked to Roblox userId
+        // Step 1: Roblox rank update (keeping your original logic)
+        await noblox.setCookie(ROBLOX_COOKIE);
+        console.log('[INFO] Successfully logged into Roblox');
+
+        const currentRank = await noblox.getRankInGroup(GROUP_ID, userId);
+        console.log(`[INFO] Current rank for user ${userId}: ${currentRank} (${ROLE_MAPPING[currentRank]?.name || 'Unknown'})`);
+
+        if (roleId > currentRank && roleId !== 255) {
+            console.log(`[INFO] Updating Roblox rank for user ${userId} to ${roleId} (${ROLE_MAPPING[roleId].name})`);
+            await noblox.setRank(GROUP_ID, userId, roleId);
+            console.log(`[SUCCESS] Updated Roblox rank for user ${userId} to ${roleId}`);
+        } else if (currentRank === 255) {
+            console.log(`[INFO] User ${userId} is owner (rank 255), skipping Roblox rank update`);
+        } else {
+            console.log(`[INFO] Role ${roleId} (${ROLE_MAPPING[roleId].name}) is not higher than current rank ${currentRank}, no Roblox change made`);
+        }
+
+        // Step 2: Get Discord ID from RoVer
         let discordId;
         try {
             const roverResponse = await axios.get(
                 `https://api.rover.link/roblox-to-discord/${userId}`,
-                { headers: { Authorization: `Bearer ${process.env.ROVER_API_KEY}` } } // Use your API key
+                { headers: { Authorization: `Bearer ${process.env.ROVER_API_KEY}` } }
             );
-            discordId = roverResponse.data.discordId || null; // RoVer returns { discordId: "..." }
+            discordId = roverResponse.data.discordId || null;
             if (!discordId) {
                 console.log(`[INFO] No Discord ID found for Roblox user ${userId} in RoVer`);
                 return res.json({ success: false, message: 'User not verified with RoVer' });
@@ -107,7 +122,7 @@ app.post('/change-role', async (req, res) => {
             return res.json({ success: false, message: 'User not verified with RoVer' });
         }
 
-        // Step 2: Check if Discord user is in the server
+        // Step 3: Check if Discord user is in the server
         const guild = discordClient.guilds.cache.get(DISCORD_GUILD_ID);
         if (!guild) {
             console.warn('[WARN] Discord guild not found');
@@ -121,7 +136,7 @@ app.post('/change-role', async (req, res) => {
         }
         console.log(`[INFO] Discord user ${discordId} confirmed in server`);
 
-        // Step 3: Update Discord roles
+        // Step 4: Update Discord roles
         if (LEVEL_ROLES.includes(roleId)) {
             const rolesToRemove = LEVEL_ROLES
                 .filter(r => r < roleId && ROLE_MAPPING[r])
@@ -138,7 +153,7 @@ app.post('/change-role', async (req, res) => {
             console.log(`[SUCCESS] Added role ${newRoleId} to ${discordId}`);
         }
 
-        res.json({ success: true, message: 'Discord role updated successfully' });
+        res.json({ success: true, message: 'Role updated or no change needed' });
     } catch (error) {
         console.error('[ERROR] Error updating role:', error.message);
         console.error('[ERROR] Stack trace:', error.stack);
